@@ -25,7 +25,9 @@ export default function PacmanGame() {
   // Fixed timestep : le moteur tourne toujours à 60 ticks logiques/s
   // indépendamment du frame rate réel (mobile = 30-60fps, desktop = 60-144fps)
   const FIXED_DT = 1000 / 60; // ~16.67ms par tick
-  const MAX_UPDATES_PER_FRAME = 5; // évite le "spiral of death"
+  // 4 updates max par frame = gère jusqu'à 15fps minimum
+  // (60fps / 4 = 15fps : en dessous, le jeu ralentit au lieu de sauter)
+  const MAX_UPDATES_PER_FRAME = 4;
 
   const [status, setStatus] = useState<GameStatus>('menu');
   const [score, setScore] = useState(0);
