@@ -65,6 +65,25 @@ export interface Particle {
   size: number;
 }
 
+// Onde de choc (pour explosion quand on mange un fantôme)
+export interface Shockwave {
+  x: number;
+  y: number;
+  radius: number;
+  maxRadius: number;
+  life: number;
+  maxLife: number;
+  color: string;
+}
+
+// Flash d'écran (pour manger un fantôme, mort, etc.)
+export interface ScreenFlash {
+  color: string;
+  life: number;
+  maxLife: number;
+  intensity: number;
+}
+
 export interface FloatingScore {
   x: number;
   y: number;
@@ -74,7 +93,18 @@ export interface FloatingScore {
   color: string;
 }
 
-export type GameStatus = 'menu' | 'ready' | 'playing' | 'paused' | 'dying' | 'levelComplete' | 'gameOver';
+export type GameStatus =
+  | 'menu'
+  | 'modeSelect'
+  | 'ready'
+  | 'playing'
+  | 'paused'
+  | 'dying'
+  | 'levelComplete'
+  | 'levelTransition'  // transition entre niveaux (fade + countdown)
+  | 'gameOver';
+
+export type GameMode = 'classic' | 'survival';
 
 export interface GameStats {
   score: number;
@@ -83,7 +113,7 @@ export interface GameStats {
   level: number;
   dotsRemaining: number;
   totalDots: number;
-  ghostsEaten: number; // multiplier combo
+  ghostsEaten: number;
 }
 
 export const TILE_SIZE = 24;

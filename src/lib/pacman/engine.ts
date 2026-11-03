@@ -1,6 +1,7 @@
 import {
   CellType,
   Direction,
+  GameMode,
   GhostMode,
   GhostName,
   GhostState,
@@ -9,6 +10,8 @@ import {
   MAZE_ROWS,
   PacmanState,
   Particle,
+  Shockwave,
+  ScreenFlash,
   FloatingScore,
   TILE_SIZE,
   GameStatus,
@@ -48,6 +51,7 @@ export interface EngineCallbacks {
   onPacmanDeath: () => void;
   onLevelComplete: () => void;
   onLoseLife: () => void;
+  onLevelTransition?: (level: number) => void;
 }
 
 export class PacmanEngine {
@@ -55,31 +59,38 @@ export class PacmanEngine {
   pacman: PacmanState;
   ghosts: GhostState[];
   particles: Particle[] = [];
+  shockwaves: Shockwave[] = [];
+  screenFlashes: ScreenFlash[] = [];
   floatingScores: FloatingScore[] = [];
   status: GameStatus = 'menu';
+  gameMode: GameMode = 'classic';
   level = 1;
   score = 0;
   highScore = 0;
   lives = 3;
   dotsRemaining = 0;
   totalDots = 0;
-  ghostsEaten = 0; // combo courant pendant un power
+  ghostsEaten = 0;
   modeTimer = 0;
   globalMode: 'chase' | 'scatter' = 'scatter';
   readyTimer = 0;
   deathTimer = 0;
   levelCompleteTimer = 0;
+  levelTransitionTimer = 0;  // timer pour l'écran de transition
   gameOverTimer = 0;
   lastTime = 0;
   callbacks: EngineCallbacks;
-  // Pour animation indépendante du rendu
   timeAccumulator = 0;
-  // Timestamp de début de partie (pour le timing de libération des fantômes)
   private gameStartTime = 0;
+  // Mode survie : temps écoulé et difficulté
+  survivalTime = 0;          // ms écoulées en survie
+  survivalDifficulty = 0;    // 0..n, augmente avec le temps
+  // Compteur de temps pour le respawn de dots en mode survie
+  private dotRespawnTimer = 0;
 
   constructor(callbacks: EngineCallbacks) {
     this.callbacks = callbacks;
-    this.grid = parseMaze();
+    this.grid = parseMaze(1);
     const { dots, power } = this.countPellets();
     this.totalDots = dots + power;
     this.dotsRemaining = this.totalDots;
@@ -169,31 +180,46 @@ export class PacmanEngine {
   }
 
   reset() {
-    this.grid = parseMaze();
+    // Charger le labyrinthe correspondant au niveau actuel
+    this.grid = parseMaze(this.level);
     const { dots, power } = this.countPellets();
     this.totalDots = dots + power;
     this.dotsRemaining = this.totalDots;
     this.pacman = this.createPacman();
     this.ghosts = this.createGhosts();
     this.particles = [];
+    this.shockwaves = [];
+    this.screenFlashes = [];
     this.floatingScores = [];
     this.ghostsEaten = 0;
     this.status = 'ready';
-    this.readyTimer = 1800; // 1.8s "READY!"
+    this.readyTimer = 1800;
     this.modeTimer = 0;
     this.globalMode = 'scatter';
-    // Le temps de jeu commence maintenant (relatif, pas absolu)
     this.gameStartTime = performance.now();
-    // Mélodie "Ready" pendant l'écran d'attente
+    this.survivalTime = 0;
+    this.dotRespawnTimer = 0;
     soundManager.play('ready');
   }
 
-  startGame() {
+  startGame(mode: GameMode = 'classic') {
+    this.gameMode = mode;
     this.score = 0;
-    this.lives = 3;
+    this.lives = mode === 'survival' ? 1 : 3;  // 1 vie en survie, 3 en classique
     this.level = 1;
+    this.survivalDifficulty = 0;
     this.reset();
     soundManager.play('start');
+  }
+
+  // Ajuste la vitesse des fantômes selon la difficulté (mode survie ou niveaux élevés)
+  private get difficultySpeedMultiplier(): number {
+    if (this.gameMode === 'survival') {
+      // En survie : +10% tous les 15s
+      return 1 + this.survivalDifficulty * 0.1;
+    }
+    // En classique : +5% par niveau après le 1er
+    return 1 + Math.max(0, this.level - 1) * 0.05;
   }
 
   togglePause() {
@@ -366,11 +392,18 @@ export class PacmanEngine {
 
     // Vérifier fin de niveau
     if (this.dotsRemaining === 0 && this.status === 'playing') {
-      this.status = 'levelComplete';
-      this.levelCompleteTimer = 2000;
-      this.updateHighScore();
-      soundManager.play('levelComplete');
-      this.callbacks.onLevelComplete();
+      if (this.gameMode === 'survival') {
+        // En survie : les dots respawn, pas de fin de niveau
+        this.respawnAllDots();
+        this.addScreenFlash('#3DF5FF', 400, 0.4);
+      } else {
+        // En classique : passer à l'écran de transition puis niveau suivant
+        this.status = 'levelComplete';
+        this.levelCompleteTimer = 1500;
+        this.updateHighScore();
+        soundManager.play('levelComplete');
+        this.callbacks.onLevelComplete();
+      }
     }
 
     // Power state expiry
@@ -448,7 +481,8 @@ export class PacmanEngine {
 
   private moveGhost(g: GhostState, dt: number) {
     const now = performance.now();
-    let speed = g.speed;
+    // Appliquer le multiplicateur de difficulté (mode survie ou niveaux élevés)
+    let speed = g.speed * this.difficultySpeedMultiplier;
     if (g.mode === 'frightened') speed *= 0.6;
     if (g.mode === 'eaten' || g.eatenReturnHome) speed *= 2.2;
     // Ralentir dans le tunnel
@@ -616,15 +650,23 @@ export class PacmanEngine {
       const dist = Math.hypot(dx, dy);
       if (dist < TILE_SIZE * 0.6) {
         if (g.mode === 'frightened') {
-          // Manger le fantôme
+          // Manger le fantôme — explosion de particules améliorée
           this.ghostsEaten++;
-          const points = 200 * Math.pow(2, this.ghostsEaten - 1); // 200, 400, 800, 1600
+          const points = 200 * Math.pow(2, this.ghostsEaten - 1);
           this.score += points;
           g.eatenReturnHome = true;
           g.mode = 'eaten';
-          this.spawnParticles(g.x, g.y, g.color, 16);
+          // Explosion de particules (plus grosse + couleurs multiples)
+          this.spawnParticles(g.x, g.y, g.color, 30);
+          this.spawnParticles(g.x, g.y, '#FFFFFF', 12);
+          this.spawnParticles(g.x, g.y, '#FFD93D', 10);
+          // Onde de choc
+          this.addShockwave(g.x, g.y, g.color, 100);
+          this.addShockwave(g.x, g.y, '#FFFFFF', 60);
+          // Flash d'écran
+          this.addScreenFlash(g.color, 250, 0.35);
           this.floatingScores.push({
-            x: g.x, y: g.y, value: points, life: 1200, maxLife: 1200, color: '#3DF5FF'
+            x: g.x, y: g.y, value: points, life: 1400, maxLife: 1400, color: '#3DF5FF'
           });
           soundManager.play('eatGhost');
           this.callbacks.onEatGhost(g, this.ghostsEaten);
@@ -633,6 +675,9 @@ export class PacmanEngine {
           this.pacman.alive = false;
           this.status = 'dying';
           this.deathTimer = 1800;
+          // Explosion de particules à la mort
+          this.spawnParticles(this.pacman.x, this.pacman.y, '#FFD93D', 24);
+          this.addScreenFlash('#FF2D6F', 400, 0.5);
           soundManager.play('death');
           this.callbacks.onPacmanDeath();
           break;
@@ -658,6 +703,7 @@ export class PacmanEngine {
   }
 
   private updateParticles(dt: number) {
+    // Particules
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const p = this.particles[i];
       p.x += p.vx * dt * 0.06;
@@ -666,6 +712,21 @@ export class PacmanEngine {
       p.life -= dt;
       if (p.life <= 0) this.particles.splice(i, 1);
     }
+    // Ondes de choc
+    for (let i = this.shockwaves.length - 1; i >= 0; i--) {
+      const sw = this.shockwaves[i];
+      sw.life -= dt;
+      const progress = 1 - sw.life / sw.maxLife;
+      sw.radius = sw.maxRadius * progress;
+      if (sw.life <= 0) this.shockwaves.splice(i, 1);
+    }
+    // Flashs d'écran
+    for (let i = this.screenFlashes.length - 1; i >= 0; i--) {
+      const sf = this.screenFlashes[i];
+      sf.life -= dt;
+      if (sf.life <= 0) this.screenFlashes.splice(i, 1);
+    }
+    // Floating scores
     for (let i = this.floatingScores.length - 1; i >= 0; i--) {
       const f = this.floatingScores[i];
       f.y -= 0.04 * dt;
@@ -728,7 +789,20 @@ export class PacmanEngine {
       soundManager.stopSiren();
       this.levelCompleteTimer -= dt;
       if (this.levelCompleteTimer <= 0) {
+        // Passer à l'écran de transition
         this.level++;
+        this.status = 'levelTransition';
+        this.levelTransitionTimer = 2500;  // 2.5s de transition
+        this.callbacks.onLevelTransition?.(this.level);
+      }
+      return;
+    }
+
+    if (this.status === 'levelTransition') {
+      soundManager.stopSiren();
+      this.levelTransitionTimer -= dt;
+      if (this.levelTransitionTimer <= 0) {
+        // Charger le nouveau niveau
         this.reset();
       }
       return;
@@ -745,10 +819,89 @@ export class PacmanEngine {
     this.updateParticles(dt);
     this.updateHighScore();
 
+    // Mode survie : incrémenter le temps et la difficulté
+    if (this.gameMode === 'survival') {
+      this.survivalTime += dt;
+      // Tous les 15s, augmenter la difficulté
+      const newDifficulty = Math.floor(this.survivalTime / 15000);
+      if (newDifficulty > this.survivalDifficulty) {
+        this.survivalDifficulty = newDifficulty;
+        // Bonus de score pour le temps survécu
+        this.score += 100;
+        this.addScreenFlash('#FFD93D', 300, 0.3);
+      }
+      // Respawn périodique de quelques dots
+      this.dotRespawnTimer += dt;
+      if (this.dotRespawnTimer > 5000) {
+        this.dotRespawnTimer = 0;
+        this.respawnRandomDots(8);
+      }
+    }
+
     // Mettre à jour le niveau de sirène selon les dots mangés
-    // (plus on a mangé de dots, plus la sirène monte en pitch)
     const newLevel = this.sirenLevelForDots();
     soundManager.updateSirenLevel(newLevel);
+  }
+
+  // Respawn tous les dots du labyrinthe (mode survie)
+  private respawnAllDots() {
+    // Pour chaque case vide qui était un couloir, remettre un dot
+    // On recharge le labyrinthe d'origine pour ce niveau
+    const fresh = parseMaze(this.level);
+    for (let r = 0; r < MAZE_ROWS; r++) {
+      for (let c = 0; c < MAZE_COLS; c++) {
+        // Ne respawn que les dots (pas les power pellets, qui sont gérés séparément)
+        if (fresh[r][c] === 2 && this.grid[r][c] === 0) {
+          this.grid[r][c] = 2;
+          this.dotsRemaining++;
+        }
+      }
+    }
+  }
+
+  // Respawn un nombre aléatoire de dots (mode survie)
+  private respawnRandomDots(count: number) {
+    const fresh = parseMaze(this.level);
+    const candidates: { r: number; c: number }[] = [];
+    for (let r = 0; r < MAZE_ROWS; r++) {
+      for (let c = 0; c < MAZE_COLS; c++) {
+        if (fresh[r][c] === 2 && this.grid[r][c] === 0) {
+          candidates.push({ r, c });
+        }
+      }
+    }
+    // Mélanger et prendre les N premiers
+    for (let i = candidates.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+    }
+    for (let i = 0; i < Math.min(count, candidates.length); i++) {
+      const { r, c } = candidates[i];
+      this.grid[r][c] = 2;
+      this.dotsRemaining++;
+    }
+  }
+
+  // Ajouter une onde de choc
+  addShockwave(x: number, y: number, color: string, maxRadius = 80) {
+    this.shockwaves.push({
+      x, y,
+      radius: 0,
+      maxRadius,
+      life: 500,
+      maxLife: 500,
+      color,
+    });
+  }
+
+  // Ajouter un flash d'écran
+  addScreenFlash(color: string, life: number, intensity: number) {
+    this.screenFlashes.push({
+      color,
+      life,
+      maxLife: life,
+      intensity,
+    });
   }
 
   // Calcule le niveau de sirène (0-4) selon la progression des dots
@@ -756,7 +909,6 @@ export class PacmanEngine {
     if (this.totalDots === 0) return 0;
     const eaten = this.totalDots - this.dotsRemaining;
     const ratio = eaten / this.totalDots;
-    // 5 paliers : 0%, 20%, 40%, 60%, 80%
     if (ratio < 0.2) return 0;
     if (ratio < 0.4) return 1;
     if (ratio < 0.6) return 2;

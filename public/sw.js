@@ -1,5 +1,5 @@
 // Service Worker Pac-Neon — cache les assets pour un démarrage offline
-const CACHE_NAME = 'pac-neon-v2';
+const CACHE_NAME = 'pac-neon-v3';
 const ASSETS = [
   '/',
   '/manifest.json',

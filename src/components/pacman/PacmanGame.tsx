@@ -5,16 +5,18 @@ import { PacmanEngine } from '@/lib/pacman/engine';
 import { soundManager } from '@/lib/pacman/sound';
 import {
   Direction,
+  GameMode,
   GameStatus,
   GhostState,
   MAZE_COLS,
   MAZE_ROWS,
   TILE_SIZE,
 } from '@/lib/pacman/types';
+import { getMazeTheme } from '@/lib/pacman/maze';
 import { Button } from '@/components/ui/button';
 
-const CANVAS_WIDTH = MAZE_COLS * TILE_SIZE; // 504
-const CANVAS_HEIGHT = MAZE_ROWS * TILE_SIZE; // 552
+const CANVAS_WIDTH = MAZE_COLS * TILE_SIZE;
+const CANVAS_HEIGHT = MAZE_ROWS * TILE_SIZE;
 
 export default function PacmanGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -39,6 +41,12 @@ export default function PacmanGame() {
   const [muted, setMuted] = useState(false);
   const [combo, setCombo] = useState(0);
   const [powered, setPowered] = useState(false);
+  const [gameMode, setGameMode] = useState<GameMode>('classic');
+  const [survivalTime, setSurvivalTime] = useState(0);
+  const [survivalDifficulty, setSurvivalDifficulty] = useState(0);
+  const [transitionLevel, setTransitionLevel] = useState(1);
+  // État UI séparé du moteur pour la sélection de mode
+  const [uiMode, setUiMode] = useState<'menu' | 'modeSelect'>('menu');
 
   // Init engine
   useEffect(() => {
@@ -57,10 +65,9 @@ export default function PacmanGame() {
       onPacmanDeath: () => {},
       onLevelComplete: () => {},
       onLoseLife: () => setLives(engine.lives),
+      onLevelTransition: (lvl) => setTransitionLevel(lvl),
     });
     engineRef.current = engine;
-    // Les valeurs highScore/totalDots/dotsRemaining seront synchronisées
-    // automatiquement par la game loop au premier frame.
   }, []);
 
   // Game loop
@@ -97,6 +104,9 @@ export default function PacmanGame() {
       setLevel(engine.level);
       setDotsRemaining(engine.dotsRemaining);
       setTotalDots(engine.totalDots);
+      setGameMode(engine.gameMode);
+      setSurvivalTime(engine.survivalTime);
+      setSurvivalDifficulty(engine.survivalDifficulty);
 
       // Draw
       const canvas = canvasRef.current;
@@ -112,12 +122,18 @@ export default function PacmanGame() {
     return () => cancelAnimationFrame(rafRef.current);
   }, []);
 
-  const handleStart = useCallback(() => {
+  const handleStart = useCallback((mode: GameMode = 'classic') => {
     const engine = engineRef.current;
     if (!engine) return;
     soundManager.init();
-    engine.startGame();
+    setGameMode(mode);
+    setUiMode('menu');
+    engine.startGame(mode);
     setStatus('ready');
+  }, []);
+
+  const handleSelectMode = useCallback(() => {
+    setUiMode('modeSelect');
   }, []);
 
   const handlePause = useCallback(() => {
@@ -243,10 +259,21 @@ export default function PacmanGame() {
           </span>
         </div>
         <div className="flex flex-col items-center">
-          <span className="text-[10px] uppercase tracking-[0.2em] text-cyan-300/70 font-mono">Niveau</span>
-          <span className="text-2xl md:text-3xl font-bold text-cyan-300 font-mono tabular-nums drop-shadow-[0_0_8px_rgba(34,211,238,0.7)]">
-            {level}
-          </span>
+          {gameMode === 'survival' ? (
+            <>
+              <span className="text-[10px] uppercase tracking-[0.2em] text-fuchsia-300/70 font-mono">Temps</span>
+              <span className="text-2xl md:text-3xl font-bold text-fuchsia-300 font-mono tabular-nums drop-shadow-[0_0_8px_rgba(232,121,249,0.7)]">
+                {Math.floor(survivalTime / 1000)}s
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="text-[10px] uppercase tracking-[0.2em] text-cyan-300/70 font-mono">Niveau</span>
+              <span className="text-2xl md:text-3xl font-bold text-cyan-300 font-mono tabular-nums drop-shadow-[0_0_8px_rgba(34,211,238,0.7)]">
+                {level}
+              </span>
+            </>
+          )}
         </div>
         <div className="flex flex-col items-end">
           <span className="text-[10px] uppercase tracking-[0.2em] text-cyan-300/70 font-mono">Record</span>
@@ -295,8 +322,8 @@ export default function PacmanGame() {
           </div>
         )}
 
-        {/* Overlays Menu / GameOver / Ready / Paused */}
-        {status === 'menu' && (
+        {/* Overlays Menu / ModeSelect / GameOver / Ready / Paused / Transition */}
+        {status === 'menu' && uiMode === 'menu' && (
           <Overlay>
             <div className="text-center px-6">
               <h1 className="text-5xl md:text-6xl font-black tracking-tight bg-gradient-to-br from-yellow-300 via-yellow-400 to-amber-500 bg-clip-text text-transparent drop-shadow-[0_0_25px_rgba(253,224,71,0.5)] mb-2">
@@ -308,7 +335,7 @@ export default function PacmanGame() {
                 Les pastilles power rendent les fantômes vulnérables.
               </p>
               <Button
-                onClick={handleStart}
+                onClick={handleSelectMode}
                 size="lg"
                 className="bg-gradient-to-r from-yellow-400 to-amber-500 hover:from-yellow-300 hover:to-amber-400 text-black font-bold text-lg px-8 shadow-[0_0_20px_rgba(253,224,71,0.6)]"
               >
@@ -317,8 +344,60 @@ export default function PacmanGame() {
               <div className="mt-6 text-xs text-cyan-300/60 font-mono space-y-1">
                 <p>⬆️⬇️⬅️➡️ / Z Q S D — Déplacement</p>
                 <p>Espace / P — Pause</p>
-                <p className="md:hidden">👆 Glissez pour bouger (mobile)</p>
+                <p className="md:hidden">👆 Glissez ou D-pad pour bouger (mobile)</p>
               </div>
+            </div>
+          </Overlay>
+        )}
+
+        {status === 'menu' && uiMode === 'modeSelect' && (
+          <Overlay>
+            <div className="text-center px-6 max-w-md">
+              <h2 className="text-3xl md:text-4xl font-black bg-gradient-to-r from-cyan-300 to-fuchsia-400 bg-clip-text text-transparent mb-6">
+                CHOISISSEZ VOTRE MODE
+              </h2>
+              <div className="flex flex-col gap-4">
+                {/* Mode Classique */}
+                <button
+                  onClick={() => handleStart('classic')}
+                  className="group p-5 rounded-2xl border-2 border-cyan-400/50 bg-gradient-to-br from-cyan-900/40 to-blue-900/40 hover:from-cyan-800/60 hover:to-blue-800/60 hover:border-cyan-400 transition-all text-left"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-cyan-400 to-blue-500 flex items-center justify-center text-2xl shrink-0 shadow-[0_0_12px_rgba(34,211,238,0.5)]">
+                      🎯
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="text-xl font-bold text-cyan-200">Classique</h3>
+                      <p className="text-cyan-300/70 text-xs mt-1">
+                        3 vies, niveaux progressifs, 3 labyrinthes différents
+                      </p>
+                    </div>
+                  </div>
+                </button>
+                {/* Mode Survie */}
+                <button
+                  onClick={() => handleStart('survival')}
+                  className="group p-5 rounded-2xl border-2 border-fuchsia-400/50 bg-gradient-to-br from-fuchsia-900/40 to-rose-900/40 hover:from-fuchsia-800/60 hover:to-rose-800/60 hover:border-fuchsia-400 transition-all text-left"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-fuchsia-400 to-rose-500 flex items-center justify-center text-2xl shrink-0 shadow-[0_0_12px_rgba(232,121,249,0.5)]">
+                      ⚡
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="text-xl font-bold text-fuchsia-200">Survie Infinie</h3>
+                      <p className="text-fuchsia-300/70 text-xs mt-1">
+                        1 vie, difficulté croissante, dots qui respawn. Survivez le plus longtemps !
+                      </p>
+                    </div>
+                  </div>
+                </button>
+              </div>
+              <button
+                onClick={() => setUiMode('menu')}
+                className="mt-6 text-cyan-300/60 hover:text-cyan-200 text-sm font-mono transition-colors"
+              >
+                ← Retour
+              </button>
             </div>
           </Overlay>
         )}
@@ -329,7 +408,35 @@ export default function PacmanGame() {
               <h2 className="text-3xl md:text-4xl font-black text-yellow-300 drop-shadow-[0_0_15px_rgba(253,224,71,0.7)] animate-pulse">
                 PRÊT ?
               </h2>
-              <p className="text-cyan-300/70 mt-2 font-mono text-sm">Niveau {level}</p>
+              <p className="text-cyan-300/70 mt-2 font-mono text-sm">
+                {gameMode === 'survival' ? 'MODE SURVIE' : `Niveau ${level}`}
+              </p>
+            </div>
+          </Overlay>
+        )}
+
+        {status === 'levelTransition' && (
+          <Overlay>
+            <div className="text-center">
+              <div className="mb-4 text-cyan-300/60 font-mono text-sm uppercase tracking-[0.3em]">
+                Niveau suivant
+              </div>
+              <h2
+                key={transitionLevel}
+                className="text-6xl md:text-7xl font-black bg-gradient-to-r from-yellow-300 via-cyan-300 to-fuchsia-400 bg-clip-text text-transparent drop-shadow-[0_0_30px_rgba(34,211,238,0.7)] animate-[levelPop_0.6s_ease-out]"
+              >
+                {transitionLevel}
+              </h2>
+              <style>{`
+                @keyframes levelPop {
+                  0% { transform: scale(0.3); opacity: 0; }
+                  50% { transform: scale(1.2); opacity: 1; }
+                  100% { transform: scale(1); opacity: 1; }
+                }
+              `}</style>
+              <p className="mt-4 text-fuchsia-300/80 font-mono text-sm animate-pulse">
+                Préparation du labyrinthe...
+              </p>
             </div>
           </Overlay>
         )}
@@ -370,15 +477,35 @@ export default function PacmanGame() {
               <div className="mb-6 space-y-1 font-mono">
                 <p className="text-yellow-300 text-xl">Score : {score.toLocaleString()}</p>
                 <p className="text-fuchsia-300 text-sm">Record : {highScore.toLocaleString()}</p>
-                <p className="text-cyan-300/70 text-xs">Niveau atteint : {level}</p>
+                {gameMode === 'survival' ? (
+                  <p className="text-cyan-300/70 text-xs">
+                    Survécu : {Math.floor(survivalTime / 1000)}s · Difficulté : {survivalDifficulty + 1}
+                  </p>
+                ) : (
+                  <p className="text-cyan-300/70 text-xs">Niveau atteint : {level}</p>
+                )}
               </div>
               <Button
-                onClick={handleStart}
+                onClick={() => handleStart(gameMode)}
                 size="lg"
                 className="bg-gradient-to-r from-rose-500 to-fuchsia-500 hover:from-rose-400 hover:to-fuchsia-400 text-white font-bold"
               >
                 ↻ REJOUER
               </Button>
+              <button
+                onClick={() => {
+                  const engine = engineRef.current;
+                  if (engine) {
+                    engine.status = 'menu';
+                    engine.lives = 3;
+                  }
+                  setUiMode('modeSelect');
+                  setStatus('menu');
+                }}
+                className="mt-3 block mx-auto text-cyan-300/60 hover:text-cyan-200 text-xs font-mono transition-colors"
+              >
+                ← Changer de mode
+              </button>
             </div>
           </Overlay>
         )}
@@ -445,14 +572,14 @@ export default function PacmanGame() {
           </div>
         </div>
 
-        {/* Contrôles mobiles (D-pad tactile) */}
-        <div className="md:hidden grid grid-cols-3 gap-2 max-w-[200px] mx-auto select-none">
+        {/* Contrôles mobiles (D-pad tactile amélioré) */}
+        <div className="md:hidden grid grid-cols-3 gap-2 max-w-[260px] mx-auto select-none">
           <div />
-          <DPadButton dir="up" onDir={handleDir} label="⬆" />
+          <DPadButton dir="up" onDir={handleDir} label="▲" />
           <div />
-          <DPadButton dir="left" onDir={handleDir} label="⬅" />
-          <DPadButton dir="down" onDir={handleDir} label="⬇" />
-          <DPadButton dir="right" onDir={handleDir} label="➡" />
+          <DPadButton dir="left" onDir={handleDir} label="◄" />
+          <DPadButton dir="down" onDir={handleDir} label="▼" />
+          <DPadButton dir="right" onDir={handleDir} label="►" />
         </div>
       </div>
     </div>
@@ -484,10 +611,15 @@ function DPadButton({
     <button
       onPointerDown={(e) => {
         e.preventDefault();
+        // Feedback haptique sur mobile
+        if (typeof navigator !== 'undefined' && navigator.vibrate) {
+          navigator.vibrate(15);
+        }
         onDir(dir);
       }}
-      className="aspect-square rounded-xl bg-cyan-500/15 border border-cyan-400/40 text-cyan-200 text-xl active:bg-cyan-500/30 active:scale-95 transition-all flex items-center justify-center"
+      className="aspect-square rounded-2xl bg-gradient-to-br from-cyan-500/20 to-cyan-600/10 border-2 border-cyan-400/50 text-cyan-100 text-2xl active:from-cyan-400/50 active:to-cyan-500/30 active:border-cyan-300 active:scale-90 transition-all flex items-center justify-center shadow-[0_4px_12px_rgba(0,0,0,0.3)] touch-none"
       aria-label={dir}
+      style={{ WebkitTapHighlightColor: 'transparent' }}
     >
       {label}
     </button>
@@ -498,12 +630,14 @@ function DPadButton({
 function draw(ctx: CanvasRenderingContext2D, engine: PacmanEngine) {
   const w = CANVAS_WIDTH;
   const h = CANVAS_HEIGHT;
+  // Thème du niveau courant
+  const theme = getMazeTheme(engine.level);
 
-  // Fond avec dégradé
+  // Fond avec dégradé (couleurs du thème)
   const grad = ctx.createLinearGradient(0, 0, 0, h);
-  grad.addColorStop(0, '#08081a');
-  grad.addColorStop(0.5, '#0a0a26');
-  grad.addColorStop(1, '#120828');
+  grad.addColorStop(0, theme.bgGradient[0]);
+  grad.addColorStop(0.5, theme.bgGradient[1]);
+  grad.addColorStop(1, theme.bgGradient[2]);
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, w, h);
 
@@ -511,10 +645,13 @@ function draw(ctx: CanvasRenderingContext2D, engine: PacmanEngine) {
   drawStarfield(ctx, w, h);
 
   // Labyrinthe
-  drawMaze(ctx, engine);
+  drawMaze(ctx, engine, theme);
 
   // Dots et power pellets
-  drawPellets(ctx, engine);
+  drawPellets(ctx, engine, theme);
+
+  // Ondes de choc (derrière les particules)
+  drawShockwaves(ctx, engine);
 
   // Particules
   drawParticles(ctx, engine);
@@ -530,10 +667,8 @@ function draw(ctx: CanvasRenderingContext2D, engine: PacmanEngine) {
   // Floating scores
   drawFloatingScores(ctx, engine);
 
-  // Si dying, animation de mort
-  if (engine.status === 'dying') {
-    // Pac-Man déjà dessiné en train de se fermer / disparaître
-  }
+  // Flashs d'écran (par-dessus tout)
+  drawScreenFlashes(ctx, engine);
 }
 
 let starCache: { x: number; y: number; r: number }[] | null = null;
@@ -556,20 +691,19 @@ function drawStarfield(ctx: CanvasRenderingContext2D, w: number, h: number) {
   }
 }
 
-function drawMaze(ctx: CanvasRenderingContext2D, engine: PacmanEngine) {
+function drawMaze(ctx: CanvasRenderingContext2D, engine: PacmanEngine, theme: ReturnType<typeof getMazeTheme>) {
   const grid = engine.grid;
-  // Couleurs murs - dégradé cyan/violet néon
+  // Couleurs murs basées sur le thème du niveau
   for (let r = 0; r < MAZE_ROWS; r++) {
     for (let c = 0; c < MAZE_COLS; c++) {
       const cell = grid[r][c];
       const x = c * TILE_SIZE;
       const y = r * TILE_SIZE;
       if (cell === 1) {
-        // Mur avec effet néon
-        // Couleur de base
+        // Mur avec effet néon — couleur du thème
         const isPowered = engine.pacman.powered;
-        const color1 = isPowered ? '#3DF5FF' : '#22D3EE';
-        const color2 = isPowered ? '#FF7BE0' : '#A78BFA';
+        const color1 = isPowered ? '#3DF5FF' : theme.wallColor;
+        const color2 = isPowered ? '#FF7BE0' : theme.accentColor;
 
         // Remplissage interne plus sombre
         ctx.fillStyle = 'rgba(20, 25, 60, 0.5)';
@@ -593,8 +727,8 @@ function drawMaze(ctx: CanvasRenderingContext2D, engine: PacmanEngine) {
         ctx.globalAlpha = 1;
       } else if (cell === 4) {
         // Porte fantôme
-        ctx.fillStyle = '#FF7BE0';
-        ctx.shadowColor = '#FF7BE0';
+        ctx.fillStyle = theme.accentColor;
+        ctx.shadowColor = theme.accentColor;
         ctx.shadowBlur = 8;
         ctx.fillRect(x + 2, y + TILE_SIZE / 2 - 2, TILE_SIZE - 4, 4);
         ctx.shadowBlur = 0;
@@ -603,7 +737,7 @@ function drawMaze(ctx: CanvasRenderingContext2D, engine: PacmanEngine) {
   }
 }
 
-function drawPellets(ctx: CanvasRenderingContext2D, engine: PacmanEngine) {
+function drawPellets(ctx: CanvasRenderingContext2D, engine: PacmanEngine, theme: ReturnType<typeof getMazeTheme>) {
   const grid = engine.grid;
   const t = performance.now() / 1000;
   for (let r = 0; r < MAZE_ROWS; r++) {
@@ -612,26 +746,26 @@ function drawPellets(ctx: CanvasRenderingContext2D, engine: PacmanEngine) {
       const x = c * TILE_SIZE + TILE_SIZE / 2;
       const y = r * TILE_SIZE + TILE_SIZE / 2;
       if (cell === 2) {
-        // Petit dot
-        ctx.fillStyle = '#FFE6A0';
-        ctx.shadowColor = '#FFD93D';
+        // Petit dot — couleur du thème
+        ctx.fillStyle = theme.dotColor;
+        ctx.shadowColor = theme.dotColor;
         ctx.shadowBlur = 6;
         ctx.beginPath();
         ctx.arc(x, y, 2.2, 0, Math.PI * 2);
         ctx.fill();
         ctx.shadowBlur = 0;
       } else if (cell === 3) {
-        // Power pellet pulsant
+        // Power pellet pulsant — couleur du thème
         const pulse = 4.5 + Math.sin(t * 4) * 1.8;
-        ctx.fillStyle = '#FF3DF5';
-        ctx.shadowColor = '#FF3DF5';
+        ctx.fillStyle = theme.powerColor;
+        ctx.shadowColor = theme.powerColor;
         ctx.shadowBlur = 18;
         ctx.beginPath();
         ctx.arc(x, y, pulse, 0, Math.PI * 2);
         ctx.fill();
         ctx.shadowBlur = 0;
         // halo
-        ctx.fillStyle = 'rgba(255, 61, 245, 0.2)';
+        ctx.fillStyle = theme.powerColor + '33';
         ctx.beginPath();
         ctx.arc(x, y, pulse + 3, 0, Math.PI * 2);
         ctx.fill();
@@ -808,6 +942,32 @@ function drawFloatingScores(ctx: CanvasRenderingContext2D, engine: PacmanEngine)
   ctx.globalAlpha = 1;
   ctx.shadowBlur = 0;
   ctx.textAlign = 'left';
+}
+
+function drawShockwaves(ctx: CanvasRenderingContext2D, engine: PacmanEngine) {
+  for (const sw of engine.shockwaves) {
+    const alpha = Math.max(0, sw.life / sw.maxLife);
+    ctx.globalAlpha = alpha * 0.8;
+    ctx.strokeStyle = sw.color;
+    ctx.lineWidth = 3 * alpha;
+    ctx.shadowColor = sw.color;
+    ctx.shadowBlur = 12;
+    ctx.beginPath();
+    ctx.arc(sw.x, sw.y, sw.radius, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  ctx.shadowBlur = 0;
+}
+
+function drawScreenFlashes(ctx: CanvasRenderingContext2D, engine: PacmanEngine) {
+  for (const sf of engine.screenFlashes) {
+    const alpha = Math.max(0, sf.life / sf.maxLife) * sf.intensity;
+    ctx.fillStyle = sf.color;
+    ctx.globalAlpha = alpha;
+    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+  }
+  ctx.globalAlpha = 1;
 }
 
 function roundRect(
