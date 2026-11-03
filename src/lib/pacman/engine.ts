@@ -135,9 +135,9 @@ export class PacmanEngine {
       y: start.row * TILE_SIZE + TILE_SIZE / 2,
       dir: 'left',
       nextDir: 'left',
-      // Vitesse calibrée pour être jouable sur mobile (30fps) comme sur PC (60+fps)
-      // À 60 ticks/s : 2.7 * 60 = 162 px/s ≈ 6.75 tiles/s
-      speed: 2.7,
+      // Vitesse réduite pour un gameplay plus accessible
+      // À 60 ticks/s : 2.0 * 60 = 120 px/s = 5 tiles/s
+      speed: 2.0,
       mouthAngle: 0.2,
       mouthDir: 1,
       powered: false,
@@ -154,7 +154,7 @@ export class PacmanEngine {
       y: g.row * TILE_SIZE + TILE_SIZE / 2,
       dir: 'up' as Direction,
       // Vitesse des fantômes : légèrement inférieure à Pac-Man pour qu'il puisse fuir
-      speed: 2.2,
+      speed: 1.8,
       mode: 'scatter' as GhostMode,
       color: this.ghostColor(g.name as GhostName),
       inHouse: g.name !== 'blinky',

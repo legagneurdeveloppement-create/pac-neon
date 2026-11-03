@@ -35,7 +35,7 @@ export default function Home() {
             rel="noreferrer"
             className="text-cyan-300/60 hover:text-cyan-200 text-xs md:text-sm font-mono transition-colors"
           >
-            v1.0
+            v1.1
           </a>
         </header>
 
